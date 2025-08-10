@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 `timescale 1ns / 1ps
 module controller_ec (
 	input logic clk,
@@ -168,3 +169,175 @@ always @(*) begin
 end
 
 endmodule
+=======
+`timescale 1ns / 1ps
+module controller_ec (
+	input logic clk,
+	input logic reset,
+	input  logic [3:0][207:0] map_mem,          // map memory  input
+	input logic [7:0] current_pos,				// current index of kmer in map		
+	input logic start_fix,						// received from top controller and begins the correction process
+	input logic end_of_list,					// indicates i reached the end of the map
+	input logic weak_found,						// indicates that map[0][i] = 0
+	input logic correction_done,				// signals the best correction was found and ends the correction process
+	input logic [1:0] count_solid,				// num of solids found for a specific error
+	input logic all_can_ready, 					// signals candidates created in the EC logic block are ready
+	output logic EN_CLASS,						// deactivates a part in compare logic block
+	output logic EN_EC,							// activates a part in compare logic block that evaluates if a kmer is weak/solid
+	output logic EN_SEARCH, 					// enables the increment of i
+	output logic [1:0] counter_cand_B0,			// counts the number of candidates in BRAM0
+	output logic [1:0] counter_cand_B1,			// counts the number of candidates in BRAM1
+	output logic [7:0] current_row,				// number of the row we are fixing currently
+	output logic EN_3_BASES,					// enable signal for a part in the error correction logic block 
+	output logic SEL,							// selects the path for creating candidates (handles the case of an error)
+	output logic EN_tmp4,						// enables writing in reg tmp4
+	output logic EN_CRC,						// enable signal for part in the error correction logic block  
+	output logic [7:0] candidate_row,			// number of the row we will write a candidate in 
+	output logic bram_current					// number of BRAM we are currently working on (0/1)
+);
+
+// State encoding
+typedef enum logic [3:0] {
+	IDLE,
+	FIND_WEAK,
+	PREP_FOR_EC,
+	MOD_CREATE,
+	ERROR_STATE,
+	DEFINE_SOLIDS_FOR_EDGES,
+	WRITE_2_NEXT_BRAM,
+	IS_EMPTY_ROW,
+	COMPARE_CANDIDATES
+} state_t;
+
+state_t state, next_state;
+logic [1:0]num_of_solids;
+logic end_3 =  map_mem[1][current_pos] == 0 && map_mem[2][current_pos] == 0 &&	map_mem[3][current_pos] == 1;
+logic end_5 =  map_mem[1][current_pos] == 1 && map_mem[2][current_pos] == 0 &&	map_mem[3][current_pos] == 0; 
+  
+assign error_found = (all_can_ready && ~((end_3 || end_5) && count_solid)); //indicates no fix was found for a weak kmer that is not in the ends of the read
+assign edge_fix = (all_can_ready && (end_3 || end_5) & ~count_solid); // indicates that no solid has been found for a specific 3end/5end weak kmer 
+assign weak_with_solids_exist = all_can_ready && ~(end_3 || end_5) && count_solid; // a fix was found for a kmer that is in the read (not at the ends)
+
+// State transition logic
+always_ff @(posedge clk or posedge reset) begin
+	if (reset)
+		state <= IDLE;
+	else
+		state <= next_state;
+end
+
+// Next state logic
+always @(*) begin
+	case (state)
+		IDLE: begin
+			EN_CLASS = 0;
+			EN_SEARCH = 0;
+			counter_cand_B1 = 0;
+			counter_cand_B0 = 0;
+			current_row = 0;
+			EN_3_BASES = 0;
+			EN_EC = 0;
+			SEL = 0;
+			EN_tmp4 = 0;
+			num_of_solids = 0;
+			EN_CRC = 0;
+			bram_current = 0;
+			candidate_row = 0;
+			if (start_fix) begin
+				next_state = FIND_WEAK;
+			end
+			else begin
+				next_state = IDLE;
+			end
+		end
+		FIND_WEAK: begin
+			EN_SEARCH = 1;
+			if (bram_current == 0) begin
+				counter_cand_B1 = 0;
+			end
+			else begin
+				counter_cand_B0 = 0;
+			end
+			
+			if (weak_found)begin
+				next_state = PREP_FOR_EC;
+			end
+			else if (end_of_list) begin
+				next_state = COMPARE_CANDIDATES;
+			end
+		end
+
+		PREP_FOR_EC: begin
+			EN_SEARCH = 0;
+			current_row = 0;
+			candidate_row = 0;
+			next_state = MOD_CREATE;
+		end
+		
+		MOD_CREATE: begin
+			EN_3_BASES = 1;
+			EN_EC = 1;
+			SEL = 0;
+			num_of_solids = count_solid;
+			if (error_found) begin
+			  next_state = ERROR_STATE;
+			end
+			else if (edge_fix) begin
+			  next_state = DEFINE_SOLIDS_FOR_EDGES;
+			end
+			else if (weak_with_solids_exist) begin
+			  next_state = WRITE_2_NEXT_BRAM;
+			end
+		end
+		
+		ERROR_STATE: begin
+			SEL = 1;
+			num_of_solids = 1;
+			next_state = WRITE_2_NEXT_BRAM;
+		end
+
+		DEFINE_SOLIDS_FOR_EDGES: begin
+			EN_tmp4 = 1;
+			num_of_solids = 4;
+			next_state = WRITE_2_NEXT_BRAM;
+		end
+		
+		WRITE_2_NEXT_BRAM: begin
+			if (bram_current == 0) begin
+				counter_cand_B1 = counter_cand_B1 + num_of_solids;
+			end
+			else begin
+				counter_cand_B0 = counter_cand_B0 + num_of_solids;
+			end
+			candidate_row = candidate_row + num_of_solids;
+			next_state = IS_EMPTY_ROW;
+		end
+		
+		IS_EMPTY_ROW: begin
+			EN_tmp4 = 0;
+			if ((bram_current == 0 && current_row == counter_cand_B0) || (bram_current == 1 && current_row == counter_cand_B1)) begin
+				bram_current = !bram_current;
+				next_state = FIND_WEAK;
+			end
+			else begin
+				current_row = current_row + 1;
+				next_state = MOD_CREATE;
+			end
+		end
+		
+		COMPARE_CANDIDATES: begin
+			EN_CRC = 1;
+			if (correction_done)begin
+			  next_state = IDLE;
+			end
+			else begin
+			  next_state = COMPARE_CANDIDATES;
+			end
+		end
+		
+		default: next_state = IDLE;
+	endcase
+end
+
+endmodule
+>>>>>>> origin/main

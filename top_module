@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 `timescale 1ns/100fs
 module top_module (
                 input  logic        clk,
@@ -398,3 +399,405 @@ error_correction ec (
 );
 
 endmodule
+=======
+`timescale 1ns/100fs
+module top_module (
+                input  logic        clk,
+                input  logic        reset,
+                input  logic        start,
+                input  logic [511:0] read,
+
+                output logic [511:0] best_candidate
+);
+
+// === Internal wires between controllers and modules === //
+logic start_gen, start_compare, start_class, start_fix;
+logic generation_done, compare_done, class_done, correction_done;
+
+// Map between modules
+logic [3:0][207:0] map_mem;
+
+// ===================== Top Controller ===================== //
+top_controller ctrl_top (
+                .clk(clk),
+                .reset(reset),
+                .start(start),
+                .generation_done(generation_done),
+                .compare_done(compare_done),
+                .class_done(class_done),
+                .correction_done(correction_done),
+                .start_gen(start_gen),
+                .start_compare(start_compare),
+                .start_class(start_class),
+                .start_fix(start_fix)
+);
+
+// ================== Shared SRAM Signals ================== //
+logic OEB1, CSB1, WEB1, OEB2, CSB2, WEB2;
+logic OEB1_ba, CSB1_ba, WEB1_ba, OEB2_ba, CSB2_ba, WEB2_ba;
+logic [63:0] lfsr_datain1, lfsr_datain2, lfsr_datain3, lfsr_datain4, lfsr_datain_ba;
+logic [6:0]  lfsr_address, lfsr_address_ba;
+logic [63:0] cmp_datain1, cmp_datain2, cmp_datain3, cmp_datain4, cmp_datain_ba;
+logic [6:0]  cmp_address, cmp_address_ba;
+logic [63:0] dataout1, dataout2, dataout3, dataout4, dataout_ba;
+
+// Control signals from controllers
+logic WEB1_ctrl_sram, CSB1_ctrl_sram, OEB1_ctrl_sram;
+logic WEB1_ba_ctrl_sram, CSB1_ba_ctrl_sram, OEB1_ba_ctrl_sram;
+logic WEB2_ctrl_sram, CSB2_ctrl_sram, OEB2_ctrl_sram;
+logic WEB2_ba_ctrl_sram, CSB2_ba_ctrl_sram, OEB2_ba_ctrl_sram;
+logic WEB1_hash,     CSB1_hash,     OEB1_hash;
+logic WEB2_hash,     CSB2_hash,     OEB2_hash;
+
+// Assign control signals based on which module is active
+// Priority: start_compare > start_gen
+assign WEB1     = (start_compare) ? WEB1_ctrl_sram     : (start_gen ? WEB1_hash     : 1'b1);
+assign CSB1     = (start_compare) ? CSB1_ctrl_sram     : (start_gen ? CSB1_hash     : 1'b1);
+assign OEB1     = (start_compare) ? OEB1_ctrl_sram     : (start_gen ? OEB1_hash     : 1'b1);
+
+assign WEB1_ba  = (start_compare) ? WEB1_ctrl_sram     : (start_gen ? WEB1_hash     : 1'b1);
+assign CSB1_ba  = (start_compare) ? CSB1_ctrl_sram     : (start_gen ? CSB1_hash     : 1'b1);
+assign OEB1_ba  = (start_compare) ? OEB1_ctrl_sram     : (start_gen ? OEB1_hash     : 1'b1);
+
+assign WEB2     = (start_compare) ? WEB2_ctrl_sram     : (start_gen ? WEB2_hash     : 1'b1);
+assign CSB2     = (start_compare) ? CSB2_ctrl_sram     : (start_gen ? CSB2_hash     : 1'b1);
+assign OEB2     = (start_compare) ? OEB2_ctrl_sram     : (start_gen ? OEB2_hash     : 1'b1);
+
+assign WEB2_ba  = (start_compare) ? WEB2_ctrl_sram     : (start_gen ? WEB2_hash     : 1'b1);
+assign CSB2_ba  = (start_compare) ? CSB2_ctrl_sram     : (start_gen ? CSB2_hash     : 1'b1);
+assign OEB2_ba  = (start_compare) ? OEB2_ctrl_sram     : (start_gen ? OEB2_hash     : 1'b1);
+
+// ====================== Shared SRAM  ====================== //
+//
+shared_sram sram_inst (
+                .clk(clk),
+                .reset(reset),
+                .start_gen(start_gen),
+                .start_compare(start_compare),
+
+                .lfsr_address(lfsr_address),
+                .lfsr_address_ba(lfsr_address_ba),
+                .lfsr_datain1(lfsr_datain1),
+                .lfsr_datain2(lfsr_datain2),
+                .lfsr_datain3(lfsr_datain3),
+                .lfsr_datain4(lfsr_datain4),
+                .lfsr_datain_ba(lfsr_datain_ba),
+
+                .cmp_address(cmp_address),
+                .cmp_address_ba(cmp_address_ba),
+                .cmp_datain1(cmp_datain1),
+                .cmp_datain2(cmp_datain2),
+                .cmp_datain3(cmp_datain3),
+                .cmp_datain4(cmp_datain4),
+                .cmp_datain_ba(cmp_datain_ba),
+
+                .OEB1(OEB1), .CSB1(CSB1), .WEB1(WEB1), .CEB1(clk),
+                .OEB2(OEB2), .CSB2(CSB2), .WEB2(WEB2), .CEB2(clk),
+                .OEB1_ba(OEB1_ba), .CSB1_ba(CSB1_ba), .WEB1_ba(WEB1_ba), .CEB1_ba(clk),
+                .OEB2_ba(OEB2_ba), .CSB2_ba(CSB2_ba), .WEB2_ba(WEB2_ba), .CEB2_ba(clk),
+
+                .dataout1(dataout1),
+                .dataout2(dataout2),
+                .dataout3(dataout3),
+                .dataout4(dataout4),
+                .dataout_ba(dataout_ba)
+);
+//
+// === Signals for Hash Generation Stage === //
+logic EN_RG1, EN_RG2, EN_LFSR, EN_SHIFT, EN_OUT, set_row, get_row, read_add;
+logic [97:0] rg_out;
+
+// ====================== Gen Hash Controller ====================== //
+gen_hash_controller hash_ctrl (
+                .clk(clk),
+                .reset(reset),
+                .start_gen(start_gen),
+                .EN_RG1(EN_RG1),
+                .EN_RG2(EN_RG2),
+                .EN_LFSR(EN_LFSR),
+                .WEB1(WEB1_hash),
+                .CSB1(CSB1_hash),
+                .OEB1(OEB1_hash),
+                .WEB2(WEB2_hash),
+                .CSB2(CSB2_hash),
+                .OEB2(OEB2_hash),
+                .EN_SHIFT(EN_SHIFT),
+                .EN_OUT(EN_OUT),
+                .set_row(set_row),
+                .get_row(get_row), 
+                .read_add(read_add),
+                .generation_done(generation_done)
+);
+
+// ====================== K-mer Generator ====================== //
+kmer_gen kmer_generator (
+        .clk(clk),
+        .reset(reset),
+        .read(read),
+        .EN_RG1(EN_RG1),
+        .EN_SHIFT(EN_SHIFT),
+        .EN_RG2(EN_RG2),
+        .EN_OUT(EN_OUT),
+        .rg_out(rg_out)
+);
+
+// ====================== LFSR SRAM ====================== //
+lfsr_sram sram_lfsr (
+                .clk(clk),
+                .reset(reset),
+                .rg_out(rg_out),
+                .EN_LFSR(EN_LFSR),
+                .set_row(set_row),
+                .get_row(get_row), 
+                .read_add(read_add),
+                .dataout1(dataout1),
+                .dataout2(dataout2),
+                .dataout3(dataout3),
+                .dataout4(dataout4),
+                .dataout_ba(dataout_ba),
+                .OEB1(OEB1),
+                .CSB1(CSB1),
+                .WEB1(WEB1),
+                .OEB2(OEB2),
+                .CSB2(CSB2),
+                .WEB2(WEB2),
+                .datain1(lfsr_datain1),
+                .datain2(lfsr_datain2),
+                .datain3(lfsr_datain3),
+                .datain4(lfsr_datain4),
+                .datain_ba(lfsr_datain_ba),
+                .address(lfsr_address),
+                .address_ba(lfsr_address_ba)
+);
+
+// === Signals between SRAM Compare Controller and Compare Block === //
+logic EN_CLASS_ctrl_sram, EN_CLASS_ctrl_ec;
+logic EN_EC_ctrl_sram, EN_EC_ctrl_ec;
+logic EN_POS, EN_CLASS, EN_COMPARE, EN_EC;
+
+assign EN_CLASS = start_compare ? EN_CLASS_ctrl_sram :
+                start_fix     ? EN_CLASS_ctrl_ec   : 1'b0;
+
+assign EN_EC  = start_compare ? EN_EC_ctrl_sram  :
+                start_fix     ? EN_EC_ctrl_ec      : 1'b0;
+
+logic update_map_done, result_ready, dycr_done, calc_done, map_full;
+logic [6:0] LFSR0_data;
+logic [4:0] LFSR1_data, LFSR2_data, LFSR3_data, LFSR4_data;
+logic result;
+logic Read_sram, res_to_map, local_min, calc_absolute, get_result; 
+
+// ====================== Compare Controller ====================== //
+controller_compare_sram ctrl_sram (
+        .clk(clk),
+        .reset(reset),
+        .start_compare(start_compare),
+        .CALC_DONE(calc_done),
+        .dycr_done(dycr_done),
+        .result_ready(result_ready),
+        .update_map_done(update_map_done),
+        .map_full(map_full),
+        .EN_POS(EN_POS),
+        .EN_CLASS(EN_CLASS_ctrl_sram),
+        .EN_COMPARE(EN_COMPARE),
+        .EN_EC(EN_EC_ctrl_sram),
+        // SRAM Port 1
+        .WEB1(WEB1_ctrl_sram),
+        .OEB1(OEB1_ctrl_sram),
+        .CSB1(CSB1_ctrl_sram),
+        // SRAM Port 2
+        .WEB2(WEB2_ctrl_sram),
+        .OEB2(OEB2_ctrl_sram),
+        .CSB2(CSB2_ctrl_sram),
+        // Bit array Port 1
+        .WEB1_ba(WEB1_ba_ctrl_sram),
+        .OEB1_ba(OEB1_ba_ctrl_sram),
+        .CSB1_ba(CSB1_ba_ctrl_sram),
+        // Bit array Port 2
+        .WEB2_ba(WEB2_ba_ctrl_sram),
+        .OEB2_ba(OEB2_ba_ctrl_sram),
+        .CSB2_ba(CSB2_ba_ctrl_sram),
+        
+        .compare_done(compare_done),
+        .Read_sram(Read_sram),
+        .res_to_map(res_to_map),
+        .local_min(local_min),
+        .calc_absolute(calc_absolute),
+        .get_result(get_result)
+);
+
+// ====================== Compare Module Integration ====================== //
+compare cmp (
+        .clk(clk),
+        .reset(reset),
+        .EN_CLASS(EN_CLASS),
+        .EN_POS(EN_POS),
+        .EN_EC(EN_EC),
+        .LFSR0_data(LFSR0_data),
+        .LFSR1_data(LFSR1_data),
+        .LFSR2_data(LFSR2_data),
+        .LFSR3_data(LFSR3_data),
+        .LFSR4_data(LFSR4_data),
+        .EN_COMPARE(EN_COMPARE),
+        .dataout1(dataout1),
+        .dataout2(dataout2),
+        .dataout3(dataout3),
+        .dataout4(dataout4),
+        .dataout_ba(dataout_ba),
+
+                // Read Port (Port 2)
+                .WEB2(WEB2),
+                .OEB2(OEB2),
+                .CSB2(CSB2),
+                .WEB2_ba(WEB2_ba),
+                .OEB2_ba(OEB2_ba),
+                .CSB2_ba(CSB2_ba),
+                .Read_sram(Read_sram),
+                .res_to_map(res_to_map),
+                .local_min(local_min),
+                .calc_absolute(calc_absolute),
+                .get_result(get_result),
+                
+        .datain1(cmp_datain1),
+        .datain2(cmp_datain2),
+        .datain3(cmp_datain3),
+        .datain4(cmp_datain4),
+        .datain_ba(cmp_datain_ba),
+        .address(cmp_address),
+        .address_ba(cmp_address_ba),
+        .map_full(map_full),
+        .result(result),
+        .result_ready(result_ready),
+        .calc_done(calc_done),
+        .dycr_done(dycr_done),
+        .update_map_done(update_map_done),
+        .map_mem(map_mem)
+);
+
+// =============== Classify Block =============== //
+logic EN_MUX, EN_i, EN_ONE_UPDATE;
+logic [1:0] sel0, sel1;
+logic sel2;
+logic [2:0] sel3, detailed_value;
+logic [7:0] val_from_cntrl;
+logic rise, fall;
+logic [7:0] r1, r2, i;
+logic [3:0][207:0] map;
+logic copy_map;
+logic update_done;
+logic suspend_i;
+
+classify classify_block (
+        .clk(clk),
+        .reset(reset),
+        .EN_MUX(EN_MUX),
+		.EN_ONE_UPDATE(EN_ONE_UPDATE),
+        .copy_map(copy_map),
+		.suspend_i(suspend_i),
+        .sel0(sel0),
+        .sel1(sel1),
+        .sel2(sel2),
+        .sel3(sel3),
+        .val_from_cntrl(val_from_cntrl),
+        .EN_i(EN_i),
+        .map_mem(map_mem),
+        .detailed_value(detailed_value),
+        .update_done(update_done),
+        .class_done(class_done),
+        .rise(rise),
+        .fall(fall),
+        .map(map),
+        .r1(r1),
+        .r2(r2),
+        .i(i)
+);
+
+// =============== Classify Controller =============== //
+classify_controller class_ctrl (
+        .clk(clk),
+        .reset(reset),
+        .start_class(start_class),
+        .rise(rise),
+        .fall(fall),
+        .update_done(update_done),
+        .class_done(class_done),
+        .r1(r1),
+        .r2(r2),
+        .i(i),
+        .copy_map(copy_map),
+        .EN_MUX(EN_MUX),
+		.EN_ONE_UPDATE(EN_ONE_UPDATE),
+        .EN_i(EN_i),
+        .sel0(sel0),
+        .sel1(sel1),
+        .sel2(sel2),
+        .val_from_cntrl(val_from_cntrl),
+        .detailed_value(detailed_value),
+		.suspend_i(suspend_i)
+);
+
+// === Error Correction Signals === //
+logic EN_SEARCH, SEL, EN_tmp4, EN_CRC, bram_current, EN_3_BASES;
+logic [1:0] counter_cand_B0, counter_cand_B1;
+logic [7:0] current_row;
+logic [7:0] candidate_row;
+logic weak_found, end_of_list;
+logic [1:0] count_solid;
+logic all_can_ready;
+logic [7:0] current_pos;
+
+// =============== Error Correction Controller =============== //
+
+controller_ec ec_ctrl (
+        .clk(clk),
+        .reset(reset),
+        .map_mem(map),
+        .current_pos(current_pos),
+        .start_fix(start_fix),
+        .end_of_list(end_of_list),
+        .weak_found(weak_found),
+        .correction_done(correction_done),
+        .count_solid(count_solid),
+        .all_can_ready(all_can_ready),
+        .EN_CLASS(EN_CLASS_ctrl_ec),
+        .EN_EC(EN_EC_ctrl_ec),
+        .EN_SEARCH(EN_SEARCH),
+        .counter_cand_B0(counter_cand_B0),
+        .counter_cand_B1(counter_cand_B1),
+        .current_row(current_row),
+        .EN_3_BASES(EN_3_BASES),
+        .SEL(SEL),
+        .EN_tmp4(EN_tmp4),
+        .EN_CRC(EN_CRC),
+        .candidate_row(candidate_row),
+        .bram_current(bram_current)
+);
+
+// =============== Error Correction Block =============== //
+
+error_correction ec (
+        .clk(clk),
+        .reset(reset),
+        .EN_CRC(EN_CRC),
+        .EN_SEARCH(EN_SEARCH),
+        .EN_3_BASES(EN_3_BASES),
+        .EN_tmp4(EN_tmp4),
+        .map_mem(map_mem),
+        .read(read),
+        .current_row(current_row),
+        .bram_current(bram_current),
+        .SEL(SEL),
+        .candidate_row(candidate_row),
+        .counter_cand_B0(counter_cand_B0),
+        .counter_cand_B1(counter_cand_B1),
+        .correction_done(correction_done),
+        .count_solid(count_solid),
+        .all_can_ready(all_can_ready),
+        .weak_found(weak_found),
+        .end_of_list(end_of_list),
+        .current_pos(current_pos),
+        .best_candidate(best_candidate)
+);
+
+endmodule
+>>>>>>> origin/main

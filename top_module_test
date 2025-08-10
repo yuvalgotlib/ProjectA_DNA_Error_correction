@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 `timescale 1ns / 100fs
 
 module top_module_test;
@@ -65,3 +66,72 @@ module top_module_test;
   end
 
 endmodule
+=======
+`timescale 1ns / 100fs
+
+module top_module_test;
+
+  // Clock and reset
+  logic clk;
+  logic reset;
+  logic start;
+  logic [511:0] read;
+  logic [511:0] best_candidate;
+
+  // Instantiate the DUT
+  top_module dut (
+        .clk(clk),
+        .reset(reset),
+        .start(start),
+        .read(read),
+        .best_candidate(best_candidate)
+  );
+
+  // Clock generation
+  always #5 clk = ~clk;
+
+  // Test sequence
+  initial begin
+        // Initialize signals
+        clk = 0;
+        reset = 1;
+        start = 0;
+        read = 512'b0;
+        $fsdbDumpvars(0,dut);
+
+        // Apply reset
+        #20;
+        reset = 0;
+        #20;
+        reset = 1;
+
+        // Provide test input
+        // human telomeric repeat "TTAGGG"
+        //read = 512'hf2af_2af2_af2a_f2af_2af2_af2a_f2af_2af2_af2a_f2af_2af2_af2a_f2af_2af2_af2a_f2af_2af2_af2a_f2af_2af2_af2a_f2af_2af2_af2a_f2af_2af2_af2a_f2af_2af2;
+        
+        read = 512'hf2af_2af2_af4a_f2af_2af2_af2a_f8af_2af2_af2a_f2af_2af2_af2a_f2af_2af2_af2a_f2af_2af2_af2a_f2af_2af2_af2a_f2af_2af2_af2a_f2af_2af2_af2a_f2a7_5af2;
+        //segment of the human BRCA1 gene.
+        //read = 512'h3800_0e23_05ec_ffcf_fe7c_bbfb_bf3c_bb7b_fefe_fffe_232a_dd9d_ed95_29e8_b90e_9b8d_c000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000;
+
+        //approx 50% repetitive kmers
+        //read = 512'h1b1b_1b1b_1b1b_1b1b_1b1b_1b1b_1b1b_1b1b_a7e8_4626_9875_f1c3_9f67_38cf_a951_86ae_1b1b_1b1b_1b1b_1b1b_1b1b_1b1b_1b1b_1b1b_1b1b_1b1b_1b1b_1b1b_1b1b_1b1b_1b1b;
+        //read = 512'h1234_1234_1234_1234_1234_4321_4321_1234_4321_1234_1234_0000_0000_0000_1234_0000_1111_1111_2000_1234_1432_1234_1234_1234_1234_1234_1234_1234_1234_1234_1234_1234;
+        //read = 512'h10E0_A000_B000_1B1B_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_1B1B_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000; // ATGC ATGC - 00 01 10 11 00 01 10 11
+        // Trigger start
+        #10;
+        start = 1;
+        #10;
+        start = 0;
+
+        // Wait for processing (simulation time depends on module delays)
+        #350000;
+
+        // Display result
+        $display("Best candidate: %h", best_candidate);
+
+        // Finish
+        $finish;
+  end
+
+endmodule
+>>>>>>> origin/main

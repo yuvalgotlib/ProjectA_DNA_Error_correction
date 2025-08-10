@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 `timescale 1ns / 1ps
 module classify_controller (
 		input logic clk,
@@ -117,4 +118,125 @@ module classify_controller (
 						end
 				endcase
 		end
+=======
+`timescale 1ns / 1ps
+module classify_controller (
+		input logic clk,
+		input logic reset,
+		input logic start_class,
+		input logic rise,
+		input logic fall,
+		input logic updates_done,
+		input logic send_to_idle,
+		input logic last_idx,
+		
+		output logic en_idle,
+		output logic en_wait,
+		output logic en_first_rise,
+		output logic en_regular_fall,
+		output logic en_regular_rise,
+		output logic en_end_of_list
+);
+		typedef enum logic [2:0] {
+										IDLE,
+										WAIT,
+										FIRST_RISE,
+										RISE,
+										FALL,
+										END_OF_LIST
+						} state_t;
+
+		logic first_rise_flag; // Flag to indicate if it's the first rise
+		state_t state, next_state;
+		// Sequential logic for registers
+		always_ff @(posedge clk or negedge reset) begin
+				if (!reset)
+						state <= IDLE; // Reset state
+				else
+						state <= next_state;// sequential logic here
+		end
+
+		always_comb begin
+				case (state)
+						IDLE: begin
+								// write a logic name en_idle for the logic so when we are in idle mode the signlas will get their starting values
+								en_idle = 1'b1; // Enable idle logic
+								en_wait = 1'b0;
+								first_rise_flag = 1'b1;// after the first rise, the first is set to 0.
+								if(start_class) begin
+										next_state = WAIT; // Transition to WAIT_STATE on start_class
+								end else begin
+										next_state = IDLE; // Stay in IDLE if not starting
+								end
+						end // end of idle state
+						WAIT: begin
+								en_idle = 1'b0;
+								en_wait = 1'b1; // Enable waiting logic
+								en_regular_fall = 1'b0;
+								en_regular_rise = 1'b0;
+								en_end_of_list = 1'b0; // Disable end of list logic
+								if (last_idx) begin
+										en_wait = 1'b0; // Enable last edge logic
+										if(fall) begin
+											next_state = END_OF_LIST; // Transition to END_OF_LIST if fall is detected
+										end else if(rise) begin
+											next_state = RISE;	
+										end else begin
+											next_state = END_OF_LIST; // Transition to END_OF_LIST
+
+										end
+								end else if(rise) begin
+										en_wait = 1'b0; // Disable waiting logic after the first rise
+										if(first_rise_flag) begin
+												next_state = FIRST_RISE; // Transition to FIRST_RISE
+										end else if (!first_rise_flag) begin
+												next_state = RISE; // Transition to REGULAR_RISE
+										end
+								end else if (fall) begin
+										en_wait = 1'b0; // Disable waiting logic if fall is detected
+										next_state = FALL; // Transition to REGULAR_FALL
+								end else begin
+										next_state = WAIT; // Stay in WAIT_STATE if no rise or fall
+								end
+						end // end of wait state
+						FIRST_RISE: begin
+								en_first_rise = 1'b1; // Enable first rise in the logic
+								first_rise_flag = 1'b0;// Logic for FIRST_RISE will stay 0 untill the end of the module
+								if(updates_done) begin
+										en_first_rise = 1'b0;
+										next_state = WAIT; // Transition back to WAIT_STATE after first rise
+								end else begin
+										next_state = FIRST_RISE;
+								end
+						end // end of first rise state
+						FALL: begin
+								en_regular_fall = 1'b1; // Enable regular fall logic
+								if(updates_done) begin
+										next_state = WAIT; // Transition back to WAIT_STATE after regular fall
+								end else begin
+										next_state = FALL; // Transition back to WAIT_STATE after regular fall
+								end
+						end // end of regular fall state
+						RISE: begin
+								en_regular_rise = 1'b1; // Enable regular fall logic
+								if(send_to_idle)begin
+									next_state = IDLE;
+								end
+								if(updates_done) begin
+									   next_state = WAIT; // Transition back to WAIT_STATE after regular fall		
+								end else begin
+										next_state = RISE; // Transition back to WAIT_STATE after regular fall
+								end
+						end // end of regular rise state
+						END_OF_LIST: begin
+								en_end_of_list = 1'b1; // Enable last edge logic
+								if(send_to_idle) begin
+									next_state = IDLE; // Transition back to IDLE_STATE after updates are done
+								end else begin
+									next_state = END_OF_LIST; // Loop back to IDLE or another state as needed
+								end
+						end
+				endcase
+		end
+>>>>>>> origin/main
 endmodule

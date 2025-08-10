@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 `timescale 1ns / 1ps
 module classify (
 		input  logic clk,
@@ -284,4 +285,292 @@ module classify (
 						end
 				end
 		end
+=======
+`timescale 1ns / 1ps
+module classify (
+		input  logic clk,
+		input  logic reset,
+		input  logic [3:0][207:0] map,
+		input  logic en_idle,
+		input  logic en_wait,
+		input  logic en_first_rise,
+		input  logic en_regular_fall,
+		input  logic en_regular_rise,
+		input  logic en_end_of_list,//
+
+		output logic last_idx,
+		output logic send_to_idle,//
+		output logic rise,
+		output logic fall,
+		output logic updates_done,
+		output logic [3:0][207:0] map_classified
+);
+
+		logic [7:0] r4; // it will be our i                                (r4 mark the end of a current island, left or right)
+		logic [7:0] r3; // it will follow r4                               (r3 mark the start of a right island)
+		logic [7:0] r2; // it will be only '0's if we found a solid island (r2 mark the end of a left island)
+		logic [7:0] r1; // it will hold only '1's which starts an island   (r1 mark the start of a left island)
+		logic potential, updated_counter_minus_one;
+		//logic [207:0][3:0] detailed_values;
+		logic updates_between_done;
+		logic updates_not_between_done;
+		logic [7:0] r5; // holds the last value of the regular fall index (updates each regular fall) will be used to identfy 5end
+	logic [7:0] EOL = 8'b11001111; //207
+
+		logic [7:0] c;
+		logic first_zero_5end_indicator; // used to indicate the first zero 5end indicator
+		logic update_last_idx, update_r5, check_island, update_last_not_between;
+		always_ff @(posedge clk or negedge reset) begin
+				if (!reset) begin
+						r5 <= 8'b0; 
+						r4 <= 8'b0;
+						r3 <= 8'b0;
+						r2 <= 8'b0;
+						r1 <= 8'b0;
+						c  <= 8'b0;
+				end else if (en_idle) begin //need to see how the first time we enter en_wait goes.
+						//r4 <= 1'b1; // Reset r4 to 1 when in idle state
+						map_classified[0] <= map[0];
+						map_classified[1] <= '{default: 0};
+						map_classified[2] <= '{default: 0};
+						map_classified[3] <= '{default: 0};
+				/*end else if (rise) begin//what is this? remove this condition?
+						r4 <= r4 + 1'b1; // Increment r4 on each clock cycle when rise is detected
+						r3 <= r3 + 1'b1; // Increment r3 on each clock cycle when rise is detected
+												*/
+				end else if (en_wait) begin
+										if(updated_counter_minus_one)begin
+												c <= c + 2'b10;
+												r4 <= r4 + 1'b1;
+										end else begin
+												c <= c + 1'b1;
+												r4 <= r4 + 1'b1; // Increment r4 on each clock cycle when en_wait is high
+										end
+
+				end else if (en_first_rise) begin
+										
+										if(!updated_counter_minus_one) begin
+												// 001 3end
+												map_classified[3][r3] <= 1'b0; //set the MSB of the detailed value
+												map_classified[2][r3] <= 1'b0; //set thhe second bit of the detailed value
+												map_classified[1][r3] <= 1'b1; //set the third bit of the detailed value
+												r3 <= r3 + 1'b1; // Increment r3 on each clock cycle when en_first_rise is hig
+												//r1 <= r1 + 1'b1; // need to give a starting value for r1, so it wont hurt the logic of row 113
+										end     else
+												c <= c - 1'b1;
+												//r4 <= r4 + 1'b1;
+				end else if (en_regular_fall) begin
+						if(first_zero_5end_indicator) begin
+						   r5 <= r4; // save the first value of the current regular fall index     
+						end
+						if((r4 - 1) - r3 > 0) begin
+								if(!potential && !updated_counter_minus_one) begin
+										r1 <= r3; //r1 is the one I toggled to the position of the start of the island so i bring r3 there.
+										r2 <= r4;
+								end else if(potential && updated_counter_minus_one && !updates_done) begin
+										c <= c - 1'b1;
+								end else begin
+										if(!updates_between_done) begin
+												// 011 between solid islands
+												map_classified[3][r2] <= 1'b0; //set the MSB of the detailed value
+												map_classified[2][r2] <= 1'b1; //set thhe second bit of the detailed value
+												map_classified[1][r2] <= 1'b1; //set the third bit of the detailed value
+												r2 <= r2 + 1'b1; // Increment r3 on each clock cycle when en_first_r
+										end else if(updates_between_done) begin //finished adressing the left island 
+												r3 <= r1;
+												r2 <= r4;
+										end
+								end
+						end else if(updated_counter_minus_one && !updates_done) begin 
+								c <= c - 1'b1;
+						end else if(potential) begin // just found there is not right island but there is a left.       
+								if(!updates_not_between_done) begin // can update the weak with 010 - not between
+										// 010 weaks not between solid islands
+										map_classified[3][r2] <= 1'b0; //set the MSB of the detailed value
+										map_classified[2][r2] <= 1'b1; //set the second bit of the detailed value
+										map_classified[1][r2] <= 1'b0; //set the third bit of the detailed value
+										r2 <= r2 + 1'b1; // Increment r3 on each clock cycle when en_first_r 
+								end 
+						end else if (!potential || updates_not_between_done) begin
+										r1 <= r4; // i prepare the r1 position if needed to insert value of not between on the next rise.
+										r2 <= r4;
+						end
+				end else if (en_regular_rise) begin
+						if(!update_last_not_between) begin
+								if(updated_counter_minus_one && !updates_done) begin
+												c <= c - 1'b1;
+								end else if(!potential && !updates_done) begin
+										if(!updates_not_between_done) begin //needs to update the weak between the current r4-1 and the r2 and then send r2 to 0.
+														map_classified[3][r1] <= 1'b0; //set the MSB of the detailed value
+														map_classified[2][r1] <= 1'b1; //set thhe second bit of the detailed value
+														map_classified[1][r1] <= 1'b0; //set the third bit of the detailed value
+														r1 <= r1 + 1'b1; // Increment r3 on each clock cycle when en_first_r
+														//update using r2 the value of 010
+										end else begin
+														//r1 <= r4; //not needed since done previously
+														//r3 <= r4; // to save clk will just do it before.
+																r4 <= r4 + 1'b1;
+										end
+								end else if (!updates_done) begin
+												r3 <= r4; // r3 will be the start of the next island.
+								end
+						end else if(update_last_not_between) begin
+								map_classified[3][r2] <= 1'b0; //set the MSB of the detailed value
+								map_classified[2][r2] <= 1'b1; //set thhe second bit of the detailed value
+								map_classified[1][r2] <= 1'b0; //set the third bit of the detailed value
+								r2 <= r2 + 1'b1; // Increment r3 on each clock cycle when en_first_r
+								//update using r2 the value of 010
+						end
+				end else if (en_end_of_list) begin
+						if(update_last_idx) begin // single 0 at the end of the list
+								map_classified[3][EOL] <= 1'b1; //set the MSB of the detailed value
+								map_classified[2][EOL] <= 1'b0; //set thhe second bit of the detailed value
+								map_classified[1][EOL] <= 1'b0; //set the third bit of the detailed value
+								r5 <= EOL;
+						end else if (update_r5) begin
+								map_classified[3][r5] <= 1'b1; //set the MSB of the detailed value
+								map_classified[2][r5] <= 1'b0; //set thhe second bit of the detailed value
+								map_classified[1][r5] <= 1'b0; //set the third bit of the detailed value
+								r5 <= r5 + 1'b1; // update the last index of the regular fall
+						end else if (check_island) begin
+								
+								if(r4 - r3 > 0) begin
+										map_classified[3][r2] <= 1'b1; //set the MSB of the detailed value
+										map_classified[2][r2] <= 1'b0; //set thhe second bit of the detailed value
+										map_classified[1][r2] <= 1'b0; //set the third bit of the detailed value
+										r2 <= r2 + 1'b1; // update the last index of the regular fall 
+								end
+						end
+				end
+				
+		end
+		// Combinational logic: detect edges based on current i
+		always_comb begin
+		//fall = 1'b0;
+				if(en_idle) begin
+						rise                = 1'b0;
+						fall                = 1'b0;
+						updates_done        = 1'b0;
+						last_idx         = 1'b0;
+						potential           = 1'b0;
+						updated_counter_minus_one = 1'b0;
+						first_zero_5end_indicator = 1'b1; // reset the first zero 5end indicator
+						send_to_idle        = 1'b0;
+						update_last_idx     = 1'b0;
+						update_r5           = 1'b0;
+						check_island        = 1'b0;
+						update_last_not_between = 1'b0;
+				end else begin
+						if (en_wait && r4 > 1 && r4 < 207) begin
+								
+								updates_done = 1'b0; // every wait cycle we set this to be 0 for the next rise/fall update
+								updates_between_done = 1'b0;
+								updates_not_between_done = 1'b0;
+								if (c==r4) begin
+								updated_counter_minus_one = 1'b0;
+								if(r4 == EOL && map_classified[0][r4] == map_classified[0][r4-1]) begin //reached only OEL with no EDGE
+										last_idx = 1'b1;
+										rise = 1'b0;
+										fall = 1'b0;
+								end else
+								if (r4 == EOL && map_classified[0][r4] != map_classified[0][r4-1]) begin // reached OEL with an EDGE
+										last_idx = 1'b1;
+										if (map_classified[0][r4] == 1'b0)begin
+												first_zero_5end_indicator = 1'b1; // prepare the first zero 5end indicator for the next regular fall
+												rise = 1'b0;
+												fall = 1'b1;
+										end else begin
+												fall = 1'b0;
+												rise = 1'b1;
+										end
+								end else if (r4 != EOL && map_classified[0][r4] != map_classified[0][r4-1]) begin // reached an EDGE
+										last_idx = 1'b0;
+										if (map_classified[0][r4] == 1'b0)begin
+												rise = 1'b0;
+												fall = 1'b1;
+										end else begin
+												fall = 1'b0;
+												rise = 1'b1;
+										end
+								end
+							
+						end
+						end else if (en_first_rise) begin
+								rise = 1'b0;
+								if(r3 == r4) begin //r1 will be stopped on the first '1' we have.
+										updated_counter_minus_one = 1'b1;
+										if (r4 - c == 1'b1) begin
+												updates_done = 1'b1; // the fsm will see this and on the next clk cycle will already move to the next state.
+										end
+								end
+						end else if(en_regular_fall) begin
+								if(r5 == r4) begin
+									first_zero_5end_indicator = 1'b0; // reset the first zero 5end indicator    
+								end
+								fall = 1'b0;
+								if (r4 - c == 1'b1) begin
+										//updated_counter_minus_one = 1'b0;
+										updates_done = 1'b1; // the fsm will see this and on the next clk cycle will already move to the next state.
+								end else
+								if(r1 == r3 && r2 == r4) begin  //found a left island
+										potential = 1'b1;
+										updated_counter_minus_one = 1'b1;
+								end else if(r2 == r3/*might be r1 need to check*/) begin // happens when we finihed updating a ranges values of the weak. 010 or 011
+										if(map_classified[1][r2-1] == 1'b1) begin// this LSB is different between the case of between 2 islands and NOT between
+												updates_between_done = 1'b1;
+										end else if(map_classified[1][r2-1] == 1'b0) begin
+												potential = 1'b0; // we are not between islands, we are not between solid islands.
+												updates_not_between_done = 1'b1;
+										end
+								end else if (r1 == r4 && r2 == r4) begin
+										updated_counter_minus_one = 1'b1;
+										//updates_done = 1'b1; // the fsm will see this and on the next clk cycle will already move to the next state.
+								end
+								// end of regular fall logic
+						end else if (en_regular_rise) begin
+								rise = 1'b0;
+								if(r2 == EOL) begin
+										send_to_idle = 1'b1; // send to idle if we are not between islands and we reached the end of the list
+								end
+								if(r4 - c == 1'b1) begin
+										updates_done = 1'b1;                                
+								end
+								if(!potential && r1 == r4 ) begin
+										updates_not_between_done = 1'b1; // the fsm will see this and on the next clk cycle will already move to the next state.
+										updated_counter_minus_one = 1'b1; // the fsm will see this and on the next clk cycle will already move to the next state.
+										if(r4 == EOL) begin // no left no right island
+												send_to_idle = 1'b1;
+										end
+								end else if(potential && r3 == r4 && !EOL) begin
+										if(r4 != EOL) begin
+												updated_counter_minus_one = 1'b1; // the fsm will see this and on the next clk cycle will already move to the next state.                                end
+										end else if(r4 == EOL) begin
+												update_last_not_between = 1'b1;
+										end
+								end
+
+						end else if (en_end_of_list) begin
+								if(r5 == EOL) begin
+										send_to_idle = 1'b1;
+								end
+								if(r2 == r3) begin 
+										send_to_idle = 1'b1; // send to idle if we are not between islands and we reached the end of the list
+								end
+								if(fall && !rise) begin
+										update_last_idx = 1'b1;
+								end else if(!fall && !rise) begin
+										if(map_classified[0][r4] == 1'b0) begin
+												update_r5 = 1'b1; // update the last index of the regular fall
+										end else if(map_classified[0][r4] == 1'b1) begin
+												if(!potential) begin
+														send_to_idle = 1'b1; // send to idle if we are not between islands and we reached the end of the list
+												end else if(potential) begin
+														check_island = 1'b1; // check if the last solid is the end of the right island (we found a left)
+												end
+										end
+								end
+						end
+				end
+		end
+>>>>>>> origin/main
 endmodule
