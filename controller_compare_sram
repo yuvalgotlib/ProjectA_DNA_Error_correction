@@ -1,0 +1,167 @@
+`timescale 1ns/100fs
+module controller_compare_sram (
+        input logic clk, 
+        input logic reset, 
+        input logic start_compare,       // Start signal for comparison
+        input logic CALC_DONE,           // Calculation completion signal
+        input logic dycr_done,  // Decryption done signal
+        input logic result_ready,       // Result computation completion signal
+        input logic update_map_done, // Indicates map update completion
+        input logic map_full,           // Map full signal
+        
+        output logic EN_POS,            // Enable position calculation
+        output logic EN_CLASS, // Enable classifying process
+        output logic EN_COMPARE, // Enable comparison
+        output logic EN_EC, // Enable error correction
+
+        // Control signals for bit array SRAM (port 1: write, port 2: read)
+        output logic WEB1_ba, // Write enable for bit array
+        output logic OEB1_ba, // Output enable for bit array
+        output logic CSB1_ba, // Chip select for bit array
+        output logic WEB2_ba, // Write enable for bit array (read port)
+        output logic OEB2_ba, // Output enable for bit array (read port)
+        output logic CSB2_ba, // Chip select for bit array (read port)
+
+        // Control signals for main SRAM (port 1: write, port 2: read)
+        output logic WEB1, // Write enable for SRAM
+        output logic OEB1, // Output enable for SRAM
+        output logic CSB1, // Chip select for SRAM
+        output logic WEB2, // Write enable for SRAM (read port)
+        output logic OEB2, // Output enable for SRAM (read port)
+        output logic CSB2, // Chip select for SRAM (read port)
+        
+        output logic compare_done,
+        output logic Read_sram,   // enables the reading of counters from the srams
+                output logic res_to_map,   //enables writing the 0/1 (weak/solid result) to the map
+                output logic local_min,         //enables comparing 2 counter at a time
+                output logic calc_absolute, //enables calculation of the absolute minimum of all counter
+                output logic get_result         // enables the evaluation of the absolute minimum to the threshold in order to get the 0/1 result (weak/solid result) 
+);
+
+
+        // Define FSM states
+        typedef enum logic [3:0] {
+                IDLE,
+                POS_AND_CALC,
+                READ_BIT_ARRAY,
+                WAIT,
+                READ_COUNTERS,
+                COMPARE,
+                                LOCAL_MIN,
+                                ABSOLUTE_MIN,
+                                GET_RESULT,
+                WRITE_2_SOLID_MAP
+        } state_t;
+                
+        state_t state, next_state;
+                
+        // State transition logic
+        always_ff @(posedge clk or negedge reset) begin
+                if (!reset)
+                        state <= IDLE;
+                else
+                        state <= next_state;
+        end
+
+        // Next state logic
+        always_comb begin
+                next_state = state;
+                case (state)
+                        IDLE: begin
+                                EN_POS = 1'b0;
+                                EN_CLASS = 1'b0;
+                                EN_COMPARE = 1'b0;
+                                EN_EC = 1'b0;
+                                Read_sram = 1'b0;
+                                                                res_to_map = 1'b0;
+                                                                local_min = 1'b0;
+                                                                calc_absolute = 1'b0;
+                                                                get_result = 1'b0;
+
+                                // port 1 is for writing 
+                                WEB1_ba = 1'b1;
+                                OEB1_ba = 1'b1;
+                                CSB1_ba = 1'b0;
+
+                                WEB1 = 1'b1;
+                                OEB1 = 1'b1;
+                                CSB1 = 1'b0;
+
+                                // port 2 is for reading
+                                WEB2_ba = 1'b1;
+                                OEB2_ba = 1'b0;
+                                CSB2_ba = 1'b0;
+                                
+                                WEB2 = 1'b1;
+                                OEB2 = 1'b0;
+                                CSB2 = 1'b0;
+                                compare_done = 1'b0;
+
+                                if (start_compare)
+                                        next_state = POS_AND_CALC;
+                        end
+
+                        POS_AND_CALC: begin
+                                EN_POS = 1'b1;
+                                res_to_map=1'b0;
+                                //if (CALC_DONE) begin
+                                    next_state = READ_BIT_ARRAY;
+                                /*end else begin
+                                    next_state = POS_AND_CALC;
+                                end*/
+                        end
+
+                        READ_BIT_ARRAY: begin
+                                EN_CLASS = 1'b1;
+                                EN_POS = 1'b0;
+                                next_state = WAIT;
+                        end
+                                                                
+                        WAIT: begin
+                               next_state = READ_COUNTERS;
+                        end
+
+                        READ_COUNTERS: begin
+                                Read_sram = 1;
+                                next_state = COMPARE;
+                        end
+
+                        COMPARE: begin
+                                EN_COMPARE = 1'b1;
+                                next_state = LOCAL_MIN;
+                                                end
+                                                
+                                                LOCAL_MIN: begin
+                                                        local_min = 1'b1;
+                                                        next_state = ABSOLUTE_MIN;
+                                                end
+                                                
+                                                ABSOLUTE_MIN: begin
+                                                        local_min = 1'b0;
+                                                        calc_absolute = 1'b1;
+                                                        next_state = GET_RESULT;
+                                                end
+                                                
+                                                GET_RESULT: begin
+                                                        calc_absolute = 1'b0;
+                                                        get_result = 1'b1;
+                                                        if (result_ready)
+                                                                next_state = WRITE_2_SOLID_MAP;
+                                                end
+
+                        WRITE_2_SOLID_MAP: begin
+                                                                get_result = 1'b0;
+                                                                res_to_map=1'b1;
+                                EN_COMPARE = 1'b0;
+                                if (update_map_done && !map_full) begin
+                                        next_state = POS_AND_CALC;
+                                end else if (update_map_done && map_full) begin
+                                        compare_done = 1'b1;
+                                        next_state = IDLE;
+                                end
+                        end
+
+                        default: next_state = IDLE;
+                endcase
+        end
+endmodule

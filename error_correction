@@ -1,0 +1,332 @@
+`timescale 1ns / 1ps
+module error_correction (
+	input logic clk, 
+	input logic reset, 
+	input logic EN_CRC, 
+	input logic EN_SEARCH,
+	input logic EN_3_BASES,
+	input logic EN_tmp4,
+	input logic [3:0][207:0] map_mem, 		
+	input logic [511:0] read,        		// 512-bit original read input
+	input logic [7:0] current_row, 			// Index for current BRAM row (0 to 255)
+	input logic bram_current,				// Input for BRAM selection (0 for bram[0], 1 for bram[1])
+	input logic SEL,						// selects the path for creating candidates (handles the case of an error)
+	input logic [7:0] candidate_row,				//Index for row in BRAM next where we write the candidates
+	input logic [1:0] counter_cand_B0,		// counts the number of candidates in BRAM0
+	input logic [1:0] counter_cand_B1,		// counts the number of candidates in BRAM1
+	output logic correction_done, 			// Flag for correction
+	output logic [1:0]count_solid, 		// num of solids found
+	output logic all_can_ready, 			// Ready signal for candidates
+	output logic weak_found, 				// Flag indicating weak k-mer found
+	output logic end_of_list, 				//Flag indicating we have reached the end of the map
+	output logic [7:0] current_pos, 		// current index of kmer in map
+	output logic [511:0] best_candidate 	// Best candidate output
+);
+
+	// Internal signals
+	logic [89:0] tmp1, tmp2, tmp3, tmp4;
+	//logic [511:0] base_pick;
+	
+	logic [1:0][255:0][511:0] BRAM; // 3D matrix holds the candidates for correction (BRAM0 & BRAM1)
+	logic [1:0] base;
+	logic result_ready_internal1, result_internal1, result_ready_internal2, result_internal2, result_ready_internal3, result_internal3;  
+	logic [90:0] taps_internal1;
+	logic [90:0] taps_internal2;
+	logic [90:0] taps_internal3;
+	logic [90:0] taps1;
+	logic [90:0] taps2;
+	logic [90:0] taps3;	
+	
+	logic [6:0] LFSR0_data1, LFSR0_data2, LFSR0_data3; //functions as the address
+	logic [4:0] LFSR1_data1, LFSR1_data2, LFSR1_data3; 
+	logic [4:0] LFSR2_data1, LFSR2_data2, LFSR2_data3;
+	logic [4:0] LFSR3_data1, LFSR3_data2, LFSR3_data3;
+	logic [4:0] LFSR4_data1, LFSR4_data2, LFSR4_data3;
+	
+
+	// Logic for finding weak k-mers
+	always_ff @(posedge clk or posedge reset) begin
+		if (reset) begin
+			current_pos <= 511;
+			end_of_list <= 0;
+			weak_found <= 0;
+		end 
+		else if (EN_SEARCH) begin
+			if (current_pos == 209) begin
+				end_of_list <= 1;
+			end
+			else if (map_mem[0][current_pos] == 0) begin
+				weak_found <= 1;
+			end
+			else 
+				current_pos <= current_pos - 1;
+				weak_found <= 0;
+			end 
+		end
+	
+	// Logic for BASE_PICK (Base picking from the current k-mer)
+	always_ff @(posedge clk) begin
+		base <= BRAM[bram_current][current_row][current_pos - 88 -: 2];
+	end
+	
+	// Logic for MOD_KMER_AND_CLASS
+	always_comb begin
+		case(base)
+			00:begin				// base = A
+				if (SEL == 1) begin
+					tmp1 = {BRAM[bram_current][current_row][current_pos -: 88] , base};				//error state 
+				end
+				else begin
+					tmp1 = {BRAM[bram_current][current_row][current_pos -: 88] , 2'b01}; 			// always replaced by T
+					tmp2 = {BRAM[bram_current][current_row][current_pos -: 88] , 2'b10}; 			// always replaced by G
+					tmp3 = {BRAM[bram_current][current_row][current_pos -: 88] , 2'b11};			// always replaced by C 
+					if(EN_tmp4 == 1) begin
+						tmp4 = {BRAM[bram_current][current_row][current_pos -: 88] , base};			//no solids were found for weak at edges => takes all as candidates
+					end
+				end
+			end
+			
+			01:begin				//base = T
+				if (SEL == 1) begin
+					tmp1 = {BRAM[bram_current][current_row][current_pos -: 88] , base};				//error state
+				end
+				else begin
+					tmp1 = {BRAM[bram_current][current_row][current_pos -: 88] , 2'b00}; 			// always replaced by A
+					tmp2 = {BRAM[bram_current][current_row][current_pos -: 88] , 2'b10}; 			// always replaced by G
+					tmp3 = {BRAM[bram_current][current_row][current_pos -: 88] , 2'b11};			// always replaced by C 
+					if(EN_tmp4 == 1) begin
+						tmp4 = {BRAM[bram_current][current_row][current_pos -: 88] , base};			//no solids were found for weak at edges => takes all as candidates
+					end
+				end
+			end
+			10:begin				//base = G
+				if (SEL == 1) begin
+					tmp1 = {BRAM[bram_current][current_row][current_pos -: 88] , base};				//error state
+				end
+				else begin
+					tmp1 = {BRAM[bram_current][current_row][current_pos -: 88] , 2'b01}; 			// always replaced by T
+					tmp2 = {BRAM[bram_current][current_row][current_pos -: 88] , 2'b00}; 			// always replaced by A
+					tmp3 = {BRAM[bram_current][current_row][current_pos -: 88] , 2'b11};			// always replaced by C
+					if(EN_tmp4 == 1) begin
+						tmp4 = {BRAM[bram_current][current_row][current_pos -: 88] , base};			//no solids were found for weak at edges => takes all as candidates
+					end
+				end
+			end
+			11:begin				//base = C
+				if (SEL == 1) begin
+					tmp1 = {BRAM[bram_current][current_row][current_pos -: 88] , base};				//error state
+				end
+				else begin
+					tmp1 = {BRAM[bram_current][current_row][current_pos -: 88] , 2'b01}; 			// always replaced by T
+					tmp2 = {BRAM[bram_current][current_row][current_pos -: 88] , 2'b10}; 			// always replaced by G
+					tmp3 = {BRAM[bram_current][current_row][current_pos -: 88] , 2'b00};			// always replaced by A
+					if(EN_tmp4 == 1) begin
+						tmp4 = {BRAM[bram_current][current_row][current_pos -: 88] , base};			//no solids were found for weak at edges => takes all as candidates
+					end
+				end
+			end	
+		endcase
+	end
+	
+	//create LFSRs for comparing
+	assign taps_internal1 = tmp1[89:0]; 
+	assign taps_internal2 = tmp2[89:0];
+	assign taps_internal3 = tmp3[89:0];
+	assign taps1 = taps_internal1 ^ {taps_internal1[89:0], 1'b0};
+	assign taps2 = taps_internal2 ^ {taps_internal2[89:0], 1'b0};
+	assign taps3 = taps_internal3 ^ {taps_internal3[89:0], 1'b0};
+	
+	always_ff @(posedge clk) begin
+		// Update LFSR values
+		LFSR0_data1 <= {taps1[5], taps1[20], taps1[45], taps1[67], taps1[89], taps1[72], taps1[36]};
+		LFSR1_data1 <= {taps1[15], taps1[51], taps1[25], taps1[50], taps1[31]};
+		LFSR2_data1 <= {taps1[9], taps1[44], taps1[58], taps1[13], taps1[85]};
+		LFSR3_data1 <= {taps1[40], taps1[80], taps1[55], taps1[20], taps1[60]};
+		LFSR4_data1 <= {taps1[15], taps1[30], taps1[5], taps1[85], taps1[45]};
+		
+		// Update LFSR values
+		LFSR0_data2 <= {taps2[5], taps2[20], taps2[45], taps2[67], taps2[89], taps2[72], taps2[36]};
+		LFSR1_data2 <= {taps2[15], taps2[51], taps2[25], taps2[50], taps2[31]};
+		LFSR2_data2 <= {taps2[9], taps2[44], taps2[58], taps2[13], taps2[85]};
+		LFSR3_data2 <= {taps2[40], taps2[80], taps2[55], taps2[20], taps2[60]};
+		LFSR4_data2 <= {taps2[15], taps2[30], taps2[5], taps2[85], taps2[45]};
+		
+		// Update LFSR values
+		LFSR0_data3 <= {taps3[5], taps3[20], taps3[45], taps3[67], taps3[89], taps3[72], taps3[36]};
+		LFSR1_data3 <= {taps3[15], taps3[51], taps3[25], taps3[50], taps3[31]};
+		LFSR2_data3 <= {taps3[9], taps3[44], taps3[58], taps3[13], taps3[85]};
+		LFSR3_data3 <= {taps3[40], taps3[80], taps3[55], taps3[20], taps3[60]};
+		LFSR4_data3 <= {taps3[15], taps3[30], taps3[5], taps3[85], taps3[45]};
+	end
+	
+	
+	// instantiate compare block 1
+	compare cmp1 (
+		.clk(clk),
+		.reset(reset),
+		.EN_CLASS(1'b0),
+		.EN_POS(1'b0),
+		.EN_EC(1'b1),
+		.EN_COMPARE(1'b1),
+		.LFSR0_data(LFSR0_data1),
+		.LFSR1_data(LFSR1_data1),
+		.LFSR2_data(LFSR2_data1),
+		.LFSR3_data(LFSR3_data1),
+		.LFSR4_data(LFSR4_data1),
+		.dataout1(),
+		.dataout2(),
+		.dataout3(),
+		.dataout4(),
+		.dataout_ba(),
+		.datain1(), .datain2(), .datain3(), .datain4(), .datain_ba(),
+		.address(), .address_ba(),
+		.WEB2(1'b1), .CSB2(1'b0), .OEB2(1'b0),
+		.WEB2_ba(), .CSB2_ba(), .OEB2_ba(),
+		.Read_sram(),
+		.result(result_internal1),
+		.result_ready(result_ready_internal1),
+		.calc_done(), .dycr_done(), .update_map_done(),
+		.map_full(), .map_mem()
+	);
+	
+	compare cmp2 (
+		.clk(clk),
+		.reset(reset),
+		.EN_CLASS(1'b0),
+		.EN_POS(1'b0),
+		.EN_EC(1'b1),
+		.EN_COMPARE(1'b1),
+		.LFSR0_data(LFSR0_data2),
+		.LFSR1_data(LFSR1_data2),
+		.LFSR2_data(LFSR2_data2),
+		.LFSR3_data(LFSR3_data2),
+		.LFSR4_data(LFSR4_data2),
+		.dataout1(),
+		.dataout2(),
+		.dataout3(),
+		.dataout4(),
+		.dataout_ba(),
+		.datain1(), .datain2(), .datain3(), .datain4(), .datain_ba(),
+		.address(), .address_ba(),
+		.WEB2(1'b1), .CSB2(1'b0), .OEB2(1'b0),
+		.WEB2_ba(), .CSB2_ba(), .OEB2_ba(),
+		.Read_sram(),
+		.result(result_internal2),
+		.result_ready(result_ready_internal2),
+		.calc_done(), .dycr_done(), .update_map_done(),
+		.map_full(), .map_mem()
+	);
+
+	// instantiate compare block 3
+	compare cmp3 (
+		.clk(clk),
+		.reset(reset),
+		.EN_CLASS(1'b0),
+		.EN_POS(1'b0),
+		.EN_EC(1'b1),
+		.EN_COMPARE(1'b1),
+		.LFSR0_data(LFSR0_data3),
+		.LFSR1_data(LFSR1_data3),
+		.LFSR2_data(LFSR2_data3),
+		.LFSR3_data(LFSR3_data3),
+		.LFSR4_data(LFSR4_data3),
+		.dataout1(),
+		.dataout2(),
+		.dataout3(),
+		.dataout4(),
+		.dataout_ba(),
+		.datain1(), .datain2(), .datain3(), .datain4(), .datain_ba(),
+		.address(), .address_ba(),
+		.WEB2(1'b1), .CSB2(1'b0), .OEB2(1'b0),
+		.WEB2_ba(), .CSB2_ba(), .OEB2_ba(),
+		.Read_sram(),
+		.result(result_internal3),
+		.result_ready(result_ready_internal3),
+		.calc_done(), .dycr_done(), .update_map_done(),
+		.map_full(), .map_mem()
+	);
+	
+	assign count_solid = result_internal1 + result_internal2 + result_internal3;
+	assign all_can_ready = result_ready_internal1 && result_ready_internal2 && result_ready_internal3;
+	
+	function automatic logic [511:0] insert_swapped_base(
+			input logic [511:0] original,
+			input logic [89:0] tmp,
+			input logic [8:0] current_pos
+		);
+			logic [8:0] base_offset;
+			logic [511:0] mask;
+			logic [511:0] new_base;
+
+			base_offset = current_pos - 89;
+			mask = ~(512'h3 << base_offset);
+			new_base = {{510{1'b0}}, tmp[89:88]} << base_offset;
+			return (original & mask) | new_base;
+		endfunction
+
+	
+	always_comb begin
+		if (result_internal1)
+			BRAM[!bram_current][candidate_row] = insert_swapped_base(BRAM[bram_current][current_row], tmp1, current_pos);
+
+		if (result_internal2)
+			BRAM[!bram_current][candidate_row+1] = insert_swapped_base(BRAM[bram_current][current_row], tmp2, current_pos);
+
+		if (result_internal3)
+			BRAM[!bram_current][candidate_row+2] = insert_swapped_base(BRAM[bram_current][current_row], tmp3, current_pos);
+
+		if (EN_tmp4)
+			BRAM[!bram_current][candidate_row+3] = insert_swapped_base(BRAM[bram_current][current_row], tmp4, current_pos);
+	end
+
+
+	
+	// Logic for CRC_COMP (CRC comparison)
+	logic [7:0] crc_values [255:0];  // CRC values for all candidates
+	logic [7:0] min_crc;  // Smallest CRC value found
+	logic [511:0] best_candidate_temp;  // Best candidate storage
+	logic [1:0] end_bram;//need to init to 256!
+	integer i;
+
+
+	
+	always_comb begin
+		for (int idx = 0; idx < end_bram; idx++) begin
+			if (idx < (bram_current ? counter_cand_B0 : counter_cand_B1)) begin
+				logic [7:0] crc = 8'hFF;
+				for (int bit_idx = 0; bit_idx < 512; bit_idx++) begin
+					// Shift the current CRC value left by 1, and if the input bit XOR crc's MSB is 1, XOR it with the polynomial 0x07, otherwise don't change it.
+					crc = (crc << 1) ^ ((BRAM[!bram_current][idx][bit_idx] ^ crc[7]) ? 8'h69 : 8'h00);
+				end
+				crc_values[idx] = crc;
+			end else begin
+				crc_values[idx] = 8'hFF; // Or 0, depending on your preference
+			end
+		end
+	end
+
+	
+	// Find the candidate with the lowest CRC-8 value
+	always_ff @(posedge clk or posedge reset) begin
+		if (reset) begin
+			min_crc <= 8'hFF;
+			best_candidate_temp <= 512'b0;
+			correction_done <= 0;
+		end else begin
+			min_crc <= 8'hFF;
+			for (i = 0; i < 256; i = i + 1) begin
+				if (crc_values[i] < min_crc) begin
+					min_crc <= crc_values[i];
+					best_candidate_temp <= BRAM[!bram_current][i];
+				end
+			end
+			if (i == 256)begin
+				correction_done <= 1;
+			end
+		end
+	end
+
+	// Assign outputs
+	assign best_candidate = best_candidate_temp;
+
+endmodule

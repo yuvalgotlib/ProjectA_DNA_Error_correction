@@ -1,0 +1,77 @@
+`timescale 1ns / 1ps
+module top_controller (
+        input logic clk,
+        input logic reset,
+        input logic start,                              // given by the user whn it wants to start fixing the errors.
+        input logic generation_done,    // Signal indicating hash generation completion
+        input logic compare_done,               // Signal indicating position comparison completion
+        input logic class_done,                 // Signal indicating classification completion
+        input logic correction_done,    // Signal indicating error correction completion
+        output logic start_gen,                 // Control signal to start hash generation
+        output logic start_compare,             // Control signal to start comparison
+        output logic start_class,               // Control signal to start classification
+        output logic start_fix                  // Control signal to start error correction
+);
+        // States of the FSM
+        typedef enum logic [2:0] {
+                IDLE,
+                GEN_HASH_CONTROLLER,
+                SRAM_COMPARE_CONTROLLER,
+                CLASSIFY_CONTROLLER,
+                ERROR_CORRECTION_CONTROLLER
+        } state_t;
+
+        state_t state, next_state;
+
+        // State transitions given by clock
+        always_ff @(posedge clk or negedge reset) begin
+                if (!reset)
+                        state <= IDLE;
+                else
+                        state <= next_state;
+        end
+        // Next state logic using combinational
+        always_comb begin
+                next_state = state;
+                case (state)
+                        IDLE: begin //setting starting values
+                                start_gen = 0;
+                                start_compare = 0;
+                                start_class = 0;
+                                start_fix = 0;
+                                if (start)
+                                        next_state = GEN_HASH_CONTROLLER;
+                        end
+                        
+                        GEN_HASH_CONTROLLER: begin
+                                start_gen=1'b1;                 // Enable hash generation
+                                if (generation_done)
+                                        next_state = SRAM_COMPARE_CONTROLLER;
+                        end
+                        
+                        SRAM_COMPARE_CONTROLLER: begin
+                                start_gen = 1'b0;
+                                start_compare = 1'b1;           // Enable SRAM comparison
+                                if (compare_done)
+                                        next_state = CLASSIFY_CONTROLLER;
+                        end
+                        
+                        CLASSIFY_CONTROLLER: begin
+                                start_compare = 1'b0;
+                                start_class = 1'b1;             // Enable classification
+                                if (class_done)
+                                        next_state = ERROR_CORRECTION_CONTROLLER;
+                        end
+                        
+                        ERROR_CORRECTION_CONTROLLER: begin
+                                start_class = 1'b0;
+                                start_fix = 1'b1;               // Enable error correction
+                                if (correction_done)
+                                        next_state = IDLE;
+                        end
+                        
+                        default: next_state = IDLE;
+                        
+                endcase
+        end
+endmodule
