@@ -1,0 +1,41 @@
+# .github/workflows/gpt5-review.yml
+name: GPT-5 SV Code Review
+
+on:
+  pull_request:
+    paths:
+      - '**/*.sv'
+      - '**/*.svh'
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install openai
+      - name: Run GPT-5 review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          for f in $(git diff --name-only origin/${{ github.base_ref }} -- '*.sv' '*.svh'); do
+            echo "Reviewing $f..."
+            node -e "
+              import OpenAI from 'openai';
+              const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+              const fs = require('fs');
+              (async () => {
+                const code = fs.readFileSync('$f', 'utf8');
+                const rsp = await openai.chat.completions.create({
+                  model: 'gpt-5',
+                  messages: [
+                    { role: 'system', content: 'You are a SystemVerilog code reviewer for FPGA/ASIC projects.' },
+                    { role: 'user', content: 'Review this code for errors and race conditions:\n' + code }
+                  ]
+                });
+                console.log(rsp.choices[0].message?.content || '');
+              })();
+            "
+          done
