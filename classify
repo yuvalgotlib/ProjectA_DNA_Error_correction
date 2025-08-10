@@ -240,6 +240,7 @@ module classify (
 										//updates_done = 1'b1; // the fsm will see this and on the next clk cycle will already move to the next state.
 								end
 								// end of regular fall logic
+                                //added text for test
 						end else if (en_regular_rise) begin
 								rise = 1'b0;
 								if(r2 == EOL) begin
