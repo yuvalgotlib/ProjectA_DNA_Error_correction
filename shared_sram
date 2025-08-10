@@ -1,0 +1,166 @@
+`timescale 1ns/100fs
+module shared_sram (
+	input  logic clk,
+	input  logic reset,
+	input  logic start_gen,
+	input  logic start_compare,
+
+	// Address and data from LFSR (write side)
+	input  logic [6:0]  lfsr_address,
+	input  logic [6:0]  lfsr_address_ba,
+	input  logic [63:0] lfsr_datain1,
+	input  logic [63:0] lfsr_datain2,
+	input  logic [63:0] lfsr_datain3,
+	input  logic [63:0] lfsr_datain4,
+	input  logic [63:0] lfsr_datain_ba,
+
+	// Address and data from COMPARE (write side)
+	input  logic [6:0]  cmp_address,
+	input  logic [6:0]  cmp_address_ba,
+	input  logic [63:0] cmp_datain1,
+	input  logic [63:0] cmp_datain2,
+	input  logic [63:0] cmp_datain3,
+	input  logic [63:0] cmp_datain4,
+	input  logic [63:0] cmp_datain_ba,
+
+	// Control signals for WRITE port (Port 1)
+	input  logic WEB1, CEB1, CSB1, OEB1,
+	input  logic WEB1_ba, CEB1_ba, CSB1_ba, OEB1_ba,
+
+	// Control signals for READ port (Port 2)
+	input  logic WEB2, CEB2, CSB2, OEB2,
+	input  logic WEB2_ba, CEB2_ba, CSB2_ba, OEB2_ba,
+
+	// Read outputs from SRAMs (Port 2)
+	output logic [63:0] dataout1,
+	output logic [63:0] dataout2,
+	output logic [63:0] dataout3,
+	output logic [63:0] dataout4,
+	output logic [63:0] dataout_ba
+);
+
+	logic [6:0] address, address_ba;
+	logic [63:0] datain1, datain2, datain3, datain4, datain_ba;
+
+	// Arbitration between LFSR and COMPARE paths
+	always_comb begin
+		if (start_gen) begin
+			address     = lfsr_address;
+			address_ba  = lfsr_address_ba;
+			datain1     = lfsr_datain1;
+			datain2     = lfsr_datain2;
+			datain3     = lfsr_datain3;
+			datain4     = lfsr_datain4;
+			datain_ba   = lfsr_datain_ba;
+		end else if (start_compare) begin
+			address     = cmp_address;
+			address_ba  = cmp_address_ba;
+			datain1     = cmp_datain1;
+			datain2     = cmp_datain2;
+			datain3     = cmp_datain3;
+			datain4     = cmp_datain4;
+			datain_ba   = cmp_datain_ba;
+		end else begin
+			address     = 7'b0;
+			address_ba  = 7'b0;
+			datain1     = 64'b0;
+			datain2     = 64'b0;
+			datain3     = 64'b0;
+			datain4     = 64'b0;
+			datain_ba   = 64'b0;
+		end
+	end
+
+	// === Main SRAMs ===
+	dpram128x64_cb sram_main (
+		.I1(datain1),
+		.O1(),
+		.A1(address),
+		.WEB1(WEB1),
+		.CEB1(clk),
+		.CSB1(CSB1),
+		.OEB1(OEB1),
+
+		.I2(),
+		.O2(dataout1),
+		.A2(address),
+		.WEB2(WEB2),
+		.CEB2(clk),
+		.CSB2(CSB2),
+		.OEB2(OEB2)
+	);
+
+	dpram128x64_cb sram2 (
+		.I1(datain2),
+		.O1(),
+		.A1(address),
+		.WEB1(WEB1),
+		.CEB1(clk),
+		.CSB1(CSB1),
+		.OEB1(OEB1),
+
+		.I2(),
+		.O2(dataout2),
+		.A2(address),
+		.WEB2(WEB2),
+		.CEB2(clk),
+		.CSB2(CSB2),
+		.OEB2(OEB2)
+	);
+
+	dpram128x64_cb sram3 (
+		.I1(datain3),
+		.O1(),
+		.A1(address),
+		.WEB1(WEB1),
+		.CEB1(clk),
+		.CSB1(CSB1),
+		.OEB1(OEB1),
+
+		.I2(),
+		.O2(dataout3),
+		.A2(address),
+		.WEB2(WEB2),
+		.CEB2(clk),
+		.CSB2(CSB2),
+		.OEB2(OEB2)
+	);
+
+	dpram128x64_cb sram4 (
+		.I1(datain4),
+		.O1(),
+		.A1(address),
+		.WEB1(WEB1),
+		.CEB1(clk),
+		.CSB1(CSB1),
+		.OEB1(OEB1),
+
+		.I2(),
+		.O2(dataout4),
+		.A2(address),
+		.WEB2(WEB2),
+		.CEB2(clk),
+		.CSB2(CSB2),
+		.OEB2(OEB2)
+	);
+
+	// === Bit Array SRAM ===
+	dpram128x64_cb bit_array (
+		.I1(datain_ba),
+		.O1(),
+		.A1(address_ba),
+		.WEB1(WEB1_ba),
+		.CEB1(clk),
+		.CSB1(CSB1_ba),
+		.OEB1(OEB1_ba),
+
+		.I2(),
+		.O2(dataout_ba),
+		.A2(address_ba),
+		.WEB2(WEB2_ba),
+		.CEB2(clk),
+		.CSB2(CSB2_ba),
+		.OEB2(OEB2_ba)
+	);
+
+endmodule
